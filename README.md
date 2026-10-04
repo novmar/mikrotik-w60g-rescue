@@ -491,12 +491,68 @@ automatický rollback (RouterOS ho nemá), scheduler jako dead-man's switch
 
 ---
 
+## Výjezdové skripty
+
+Adresář [`vyjezd/`](vyjezd/) je pro případ, kdy se ke krabici musí s kabelem.
+Technik nemusí nic vědět o balíčcích ani Netinstallu — dostane IP adresu uzlu,
+respektive rovnou jméno skriptu.
+
+**Doma, dokud máš síť:**
+
+```bash
+cd vyjezd
+./priprav.sh                 # stáhne balíčky i netinstall a vytáhne parametry rádií
+```
+
+Z každého živého protějšku si vezme `ssid`, heslo rádia, region a režim, otočí
+režim na opačný (protějšek `bridge` → tahle strana `station-bridge` a naopak)
+a uloží to vedle profilu jako `<uzel>.conf.secrets` s právy 600. **Ty soubory
+jsou v `.gitignore`, hesla rádií se do repozitáře nikdy nedostanou.**
+
+**Na místě:**
+
+```bash
+sudo ./oprava-skautitonasa.sh
+```
+
+Skript sám:
+
+1. najde rozhraní s linkem a nastaví si adresy — ze segmentu krabice
+   i `192.168.88.100/24` pro tovární stav
+2. 25 s poslouchá a z provozu pozná, v jakém je krabice stavu:
+   - **MNDP** → krabice žije; vypíše identitu, verzi, desku a IP
+   - **BOOTP s `ARM__boot`** → je v etherbootu, NAND boot selhal
+   - **jen STP** → systém běží, ale MNDP mlčí
+   - **ticho** → není napájení nebo je mrtvá; vypíše, co zkusit
+3. když je dosažitelná → pustí `fix-w60g.sh` (doinstalace balíčku `wireless`)
+4. když to neprojde nebo je v etherbootu → **Netinstall** z lokální cache,
+   s konfigurací nasazenou hned po instalaci
+5. vrátí konfiguraci rádia, počká na beamforming a ověří spoj i pingy na bránu
+   a protějšek
+
+Profily uzlů jsou v [`vyjezd/nodes/`](vyjezd/nodes/) — obyčejné shell proměnné:
+IP, maska, brána, adresa pro notebook, protějšek, architektura. Nový uzel
+přidáš zkopírováním souboru a změnou pěti řádků.
+
+```
+vyjezd/
+├── priprav.sh              spustit doma: stáhne balíčky, vytáhne parametry
+├── oprava-na-miste.sh      vlastní opravář (čte profil)
+├── oprava-<uzel>.sh        jednořádkové spouštěče pro konkrétní uzly
+└── nodes/<uzel>.conf       profil uzlu, bez hesel
+```
+
+Potřebuje: `bash`, `curl`, `jq`, `python3`, `ip`, `tcpdump` nebo `dumpcap`, root.
+
+---
+
 ## Co je v repozitáři
 
 | soubor | k čemu |
 |---|---|
 | `fix-w60g.sh` | oprava jedné krabice; dostane IP a zbytek si zjistí sám |
 | `find-broken.sh` | projde rozsah a vypíše, kde chybí rádio nebo je spoj dole |
+| `vyjezd/` | výjezdová sada: příprava doma + opravář na místě, po uzlech |
 | `npk/` | už stažené balíčky `wireless` pro arm a arm64 |
 
 Balíčky v `npk/` jsou nezměněné soubory z download.mikrotik.com, přibalené pro
