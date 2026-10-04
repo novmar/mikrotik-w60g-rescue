@@ -218,23 +218,30 @@ Důvod je asymetrie, kterou je potřeba znát:
 - **Přidání nového balíčku** (`wireless`, který tam dosud nebyl) potřebuje ve
   flashi jeho **plnou velikost navíc**. A to je ten problém.
 
-Naměřeno na reálném Cube 60G ac:
+Naměřeno na dvou stejných krabicích Cube 60G ac, obě RouterOS 7.24.5:
 
-```
-flash celkem      16,00 MB
-routeros          12,30 MB
-volné místo        1,54 MB
-wireless NPK       1,79 MB   ← samo o sobě víc, než kolik je volno  → instalace selže
-```
+| | zdravá (kdysi Netinstall) | poškozená (upgrade z v6) |
+|---|---|---|
+| flash celkem | 16,00 MB | 16,00 MB |
+| `routeros` | 11,73 MB | 11,73 MB |
+| `wireless` | 1,79 MB | — chybí |
+| volno | 0,91 MB | 1,54 MB |
+| **mimo balíčky** | **1,64 MB** | **2,86 MB** |
 
-Co funguje:
+Ten poslední řádek je jádro věci. Krabice upgradovaná z šestky si nese
+**o 1,2 MB víc balastu** (konfigurace a zbytky po migraci) než čerstvě
+nainstalovaná. Výsledek: `11,73 + 1,79 + 2,86 = 16,38 MB` se do 16,00 MB
+prostě nevejde, zatímco zdravé krabici to vychází na 15,16 MB.
 
-1. **Nainstalovat `routeros` + `wireless` novější verze současně, jedním
+**Není to tedy o verzi balíčku, ale o tom, kolik balastu flash drží.**
+
+Co funguje, v tomhle pořadí:
+
+1. **Nainstalovat `routeros` + `wireless` NOVĚJŠÍ verze současně, jedním
    rebootem.** Instalátor přepisuje celou instalaci, takže se obojí vejde.
    Doloženo na 16MB LHG 60G (`routeros 7.16` + `wireless 7.16` najednou →
    14,5 z 16,0 MiB obsazeno,
    [forum](https://forum.mikrotik.com/t/lhg-60g-firmware-update-issue/178070)).
-   Tohle `fix-w60g.sh` zkusí sám, když zjistí, že místo nestačí.
    ```bash
    scp routeros-7.24.6-arm.npk wireless-7.24.6-arm.npk admin@10.0.0.2:
    ```
@@ -242,11 +249,43 @@ Co funguje:
    /file print detail where type="package"     # ověř shodnou verzi i architekturu
    /system reboot
    ```
-   **Verze musí být novější než nainstalovaná**, jinak instalátor nemá co
-   přepsat. Když žádná novější není, tahle cesta odpadá.
-2. **Uvolnit flash**: `/system package uninstall <nepotřebné>`, `/file remove`
+   Háček: novější verze musí existovat. Když na krabici běží to nejnovější,
+   co MikroTik vydal, není co přepsat.
+
+2. **Nainstalovat STARŠÍ dvojici, která se do flash vejde.** Starší RouterOS
+   je menší, a o ten rozdíl jde. Spouští se přes `downgrade`, instalují se
+   zase obě najednou:
+   ```
+   /tool fetch url="https://download.mikrotik.com/routeros/7.16/routeros-7.16-arm.npk" check-certificate=no
+   /tool fetch url="https://download.mikrotik.com/routeros/7.16/wireless-7.16-arm.npk" check-certificate=no
+   /system package downgrade
+   ```
+   Ověřeno na té poškozené krabici z tabulky výše: `7.24.5` se nevešlo,
+   **`7.16` ano** (`11,07 + 1,88` NPK → 13,57 MB nainstalováno, 16,43 MB
+   obsazeno). Rádio se vrátilo i s konfigurací — včetně `bond` 60GHz + 5GHz,
+   takže se nejdřív chytila 5GHz záloha a za pár sekund i 60GHz spoj
+   (rssi -52, MCS 8, 2,31 Gbps).
+
+   Velikosti NPK pro `arm`, ať je vidět, o co se hraje:
+
+   | verze | routeros | wireless |
+   |---|---|---|
+   | 7.24.5 | 11,73 MB | 1,79 MB |
+   | 7.22.1 | 11,69 MB | 1,80 MB |
+   | 7.19.4 | 11,40 MB | 1,80 MB |
+   | 7.16 | 11,07 MB | 1,88 MB |
+   | 7.13.5 | 10,90 MB | 2,64 MB |
+
+   `fix-w60g.sh` tohle dělá sám: spočítá balast, projde verze od nejnovější
+   a vybere první, která se vejde.
+
+   **Taková krabice pak musí ven z hromadných upgradů**, dokud ji někdo
+   nenetinstalluje — příští upgrade na velkou verzi ji rozbije znovu.
+
+3. **Uvolnit flash**: `/system package uninstall <nepotřebné>`, `/file remove`
    pro zálohy a supouty, logování přesměrovat z disku do paměti nebo na syslog.
-3. **Netinstall.** Flash se formátuje, takže problém s místem nenastane.
+
+4. **Netinstall.** Flash se formátuje, balast zmizí a vejde se i aktuální verze.
 
 ### Netinstall — co vzít s sebou
 

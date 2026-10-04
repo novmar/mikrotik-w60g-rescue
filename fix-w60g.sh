@@ -233,35 +233,73 @@ if [ "$FREE_AFTER" -lt "$NEED" ] && [ "$FORCE" = 0 ]; then
   say "  kanál: $(echo "$UPD" | jq -r '.channel'), nainstalováno $VER, k dispozici ${LATEST:-?}"
 
   if [ -z "$LATEST" ] || [ "$LATEST" = "$VER" ]; then
-    cat <<EOF
+    say "  novější verze není, zkusím opačný směr: STARŠÍ dvojici, která se vejde"
 
-Novější verze není k dispozici, takže není co přepsat — a volné místo na
-samostatnou instalaci nestačí.
+    # Kolik flash spolkne něco jiného než balíčky (konfigurace, zbytky po
+    # migraci z v6, rezerva). Krabice upgradovaná z šestky jich mívá o 1+ MB víc
+    # než čerstvě Netinstallovaná — a přesně o to místo tu jde.
+    ROS_SIZE="$(echo "$PKGS" | jq -r '.[] | select(.name=="routeros") | .size // 0')"
+    OVERHEAD=$((TOTAL - FREE - ROS_SIZE - WL_SIZE))
+    say "  mimo balíčky zabírá flash $(human "$OVERHEAD") (konfigurace, zbytky po migraci)"
 
-Tohle už přes síť nespravíš. Zbývá Netinstall na místě (nebo z jiného MikroTiku
-ve stejném L2 segmentu, RouterOS 7.24beta1+ má Netinstall balíček). Postup je
-v README, oddíl "Když to přes síť nejde".
+    PICK=""
+    for CAND in 7.22.1 7.19.4 7.16 7.13.5; do
+      R="$(curl -sSI -m 15 "$MIRROR/$CAND/routeros-$CAND-$ARCH.npk" | awk 'BEGIN{IGNORECASE=1}/^content-length:/{gsub(/\r/,"");print $2}')"
+      W="$(curl -sSI -m 15 "$MIRROR/$CAND/wireless-$CAND-$ARCH.npk"  | awk 'BEGIN{IGNORECASE=1}/^content-length:/{gsub(/\r/,"");print $2}')"
+      [ -n "${R:-}" ] && [ -n "${W:-}" ] || continue
+      # nainstalovaná velikost vychází zhruba na 1,05násobek NPK
+      EST=$(( (R + W) * 105 / 100 + OVERHEAD + MARGIN ))
+      if [ "$EST" -le "$TOTAL" ]; then
+        say "  $CAND: routeros $(human "$R") + wireless $(human "$W") → odhad $(human "$EST") z $(human "$TOTAL")  VEJDE SE"
+        PICK="$CAND"; break
+      fi
+      say "  $CAND: odhad $(human "$EST") z $(human "$TOTAL")  nevejde"
+    done
+
+    if [ -z "$PICK" ]; then
+      cat <<EOF
+
+Ani starší dvojice se do flash nevejde. Tohle už přes síť nespravíš — zbývá
+Netinstall na místě (formátuje flash, takže zbytky po migraci zmizí a vejde
+se i aktuální verze). Postup je v README, oddíl "Když to přes síť nejde".
 
 Spuštění s --force instalaci přesto zkusí (nic nerozbije, jen selže).
 EOF
-    exit 2
+      exit 2
+    fi
+
+    say ""
+    say "Plán: nainstalovat routeros $PICK + wireless $PICK NAJEDNOU (downgrade)."
+    say "      Rádio se vrátí i s konfigurací; krabice zůstane na starší verzi."
+    confirm "Pokračovat?" || { say "nic jsem neudělal"; exit 0; }
+
+    deliver_npk "$MIRROR/$PICK/routeros-$PICK-$ARCH.npk" "routeros-$PICK-$ARCH.npk" \
+      || die "routeros balíček se nepodařilo dopravit"
+    deliver_npk "$MIRROR/$PICK/wireless-$PICK-$ARCH.npk" "wireless-$PICK-$ARCH.npk" \
+      || die "wireless balíček se nepodařilo dopravit"
+    say "  v kořeni leží:"
+    get /file | jq -r '.[] | select(.type=="package") | "    \(.name) \(.size)"'
+
+    step "Spouštím downgrade — nainstaluje se obojí najednou"
+    post /system/package/downgrade >/dev/null 2>&1 || true
+    wait_for_box || die "krabice se po downgradu nevrátila — tohle už je na výjezd"
+  else
+    say ""
+    say "Plán: stáhnout routeros-$LATEST-$ARCH.npk i wireless-$LATEST-$ARCH.npk"
+    say "      do kořene a jedním rebootem nainstalovat obojí."
+    confirm "Pokračovat?" || { say "nic jsem neudělal"; exit 0; }
+
+    deliver_npk "$MIRROR/$LATEST/routeros-$LATEST-$ARCH.npk" "routeros-$LATEST-$ARCH.npk" \
+      || die "routeros balíček se nepodařilo dopravit"
+    deliver_npk "$MIRROR/$LATEST/wireless-$LATEST-$ARCH.npk" "wireless-$LATEST-$ARCH.npk" \
+      || die "wireless balíček se nepodařilo dopravit"
+
+    say "  v kořeni leží:"
+    get /file | jq -r '.[] | select(.type=="package") | "    \(.name) \(.size)"'
+
+    step "Reboot — nainstaluje se obojí najednou"
+    reboot_box
   fi
-
-  say ""
-  say "Plán: stáhnout routeros-$LATEST-$ARCH.npk i wireless-$LATEST-$ARCH.npk"
-  say "      do kořene a jedním rebootem nainstalovat obojí."
-  confirm "Pokračovat?" || { say "nic jsem neudělal"; exit 0; }
-
-  deliver_npk "$MIRROR/$LATEST/routeros-$LATEST-$ARCH.npk" "routeros-$LATEST-$ARCH.npk" \
-    || die "routeros balíček se nepodařilo dopravit"
-  deliver_npk "$MIRROR/$LATEST/wireless-$LATEST-$ARCH.npk" "wireless-$LATEST-$ARCH.npk" \
-    || die "wireless balíček se nepodařilo dopravit"
-
-  say "  v kořeni leží:"
-  get /file | jq -r '.[] | select(.type=="package") | "    \(.name) \(.size)"'
-
-  step "Reboot — nainstaluje se obojí najednou"
-  reboot_box
 else
   if [ "$WL_STATE" = "disabled" ]; then
     say ""
