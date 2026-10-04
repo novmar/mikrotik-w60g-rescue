@@ -235,6 +235,33 @@ prostě nevejde, zatímco zdravé krabici to vychází na 15,16 MB.
 
 **Není to tedy o verzi balíčku, ale o tom, kolik balastu flash drží.**
 
+### Ten balast se promazat nedá
+
+Vypadá to jako něco, co po sobě nechal upgrade, ale není. Vyzkoušeno na té
+poškozené krabici, pokaždé se změřeným volným místem před a po:
+
+| pokus | výsledek |
+|---|---|
+| `/system package uninstall` starého balíčku | uvolní přesně velikost balíčku, nic navíc |
+| `/file remove` | není co mazat, `/file print` ukazuje jen `flash` a `skins` |
+| `/system routerboard upgrade` (6.49.21 → 7.16) | **0 B** |
+| `/system reset-configuration no-defaults=yes` | **0 B** — ani po smazání celé konfigurace |
+
+Poslední řádek je ten podstatný: konfigurace zmizela do posledního řádku
+a volné místo zůstalo na bajt stejné. **Ten rozdíl je na úrovni NAND, ne
+v souborech** — pravděpodobně vyřazené bloky nebo jiná rezerva flash čipu.
+Softwarově se k němu nedostaneš; jediné, co ho může přepsat, je Netinstall,
+který NAND formátuje včetně tabulky vadných bloků. A ani to není jisté.
+
+Praktický závěr: taková krabice **má prostě míň použitelné flash** a musí
+zůstat na verzi, která se do ní vejde.
+
+> **Pozor na `run-after-reset`.** Skript se pouští při startu, **dřív než
+> naběhnou rozhraní**. Řádek `/interface w60g set [find default-name=wlan60-1] …`
+> z něj tiše neprojde a rádio zůstane na defaultech (`mode=bridge`,
+> `ssid=MikroTik`). Konfiguraci sítě tam dej na začátek, rádia řeš až potom
+> přes API — nebo celý blok s rádii obal `:delay 30s`.
+
 Co funguje, v tomhle pořadí:
 
 1. **Nainstalovat `routeros` + `wireless` NOVĚJŠÍ verze současně, jedním
