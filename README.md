@@ -235,26 +235,45 @@ prostě nevejde, zatímco zdravé krabici to vychází na 15,16 MB.
 
 **Není to tedy o verzi balíčku, ale o tom, kolik balastu flash drží.**
 
-### Ten balast se promazat nedá
+### Ten balast promaže jedině formát
 
-Vypadá to jako něco, co po sobě nechal upgrade, ale není. Vyzkoušeno na té
-poškozené krabici, pokaždé se změřeným volným místem před a po:
+Vypadá to jako něco, co po sobě nechal upgrade, a taky to tak je — jenže se
+k tomu zevnitř běžícího systému nedostaneš. Vyzkoušeno na té poškozené krabici,
+pokaždé se změřeným volným místem před a po:
 
-| pokus | výsledek |
+| pokus | uvolnilo |
 |---|---|
-| `/system package uninstall` starého balíčku | uvolní přesně velikost balíčku, nic navíc |
+| `/system package uninstall` starého balíčku | přesně velikost balíčku, nic navíc |
 | `/file remove` | není co mazat, `/file print` ukazuje jen `flash` a `skins` |
 | `/system routerboard upgrade` (6.49.21 → 7.16) | **0 B** |
 | `/system reset-configuration no-defaults=yes` | **0 B** — ani po smazání celé konfigurace |
+| **Netinstall (formát flash)** | **630 784 B, a režie spadla na úroveň zdravých kusů** |
 
-Poslední řádek je ten podstatný: konfigurace zmizela do posledního řádku
-a volné místo zůstalo na bajt stejné. **Ten rozdíl je na úrovni NAND, ne
-v souborech** — pravděpodobně vyřazené bloky nebo jiná rezerva flash čipu.
-Softwarově se k němu nedostaneš; jediné, co ho může přepsat, je Netinstall,
-který NAND formátuje včetně tabulky vadných bloků. A ani to není jisté.
+Čísla té krabice před a po Netinstallu:
 
-Praktický závěr: taková krabice **má prostě míň použitelné flash** a musí
-zůstat na verzi, která se do ní vejde.
+```
+před:  routeros+wireless 7.16    12,95 MiB   volno 0,32 MiB   režie 2,73 MiB
+po:    routeros+wireless 7.24.5  13,52 MiB   volno 0,93 MiB   režie 1,55 MiB
+```
+
+Po formátu se vejde i aktuální verze a volno odpovídá ostatním kusům ve flotile
+(0,86–0,92 MiB). **Takže ne, nejsou to vadné bloky ani menší čip** — je to stav
+souborového systému, který in-place upgrade principiálně nerekultivuje.
+
+MikroTik má na „dva identické kusy, různé obsazení disku" otevřený ticket
+**SUP-217255** a sám dvakrát opravoval výpočet volného místa
+([7.19](https://cdn.mikrotik.com/routeros/7.19/CHANGELOG) *improved free disk
+space calculation*,
+[7.20](https://cdn.mikrotik.com/routeros/7.20/CHANGELOG) *improved calculation
+of free space on NAND flash*). Zvětšení boot partition na arm je jednosměrné
+([7.18](https://cdn.mikrotik.com/routeros/7.18/CHANGELOG) *automatically
+increase boot part size on upgrade or netinstall*) — žádný pozdější changelog
+ho nevrací zpět.
+
+> **Nelez na hranu rozpočtu.** Pokus nainstalovat verzi, které zbývalo 68 kB
+> (7.19.4), skončil tím, že instalace došlo místo uprostřed zápisu,
+> **systém se poškodil a krabice spadla do etherbootu**. Pod ~300 kB rezervy
+> to nezkoušej; buď zůstaň na verzi s rezervou, nebo rovnou Netinstall.
 
 > **Pozor na `run-after-reset`.** Skript se pouští při startu, **dřív než
 > naběhnou rozhraní**. Řádek `/interface w60g set [find default-name=wlan60-1] …`
@@ -329,9 +348,70 @@ napájení → držet, dokud se krabice neobjeví v seznamu (10–20 s) → *Ins
 (`/export file=zaloha`) nebo měj po ruce poznámky: IP, bránu, `ssid`, `mode`
 (jedna strana `bridge`/`ap-bridge`, druhá `station-bridge`) a bridge porty.
 
-### Netinstall na dálku
+### Netinstall na dálku — ověřeno, že to jde
 
-Od RouterOS 7.24beta1 umí Netinstall i jiný MikroTik
+Pokud má krabice **ethernet do sítě** (typicky CPE na uzlu, kde je rádio jen
+spoj a management jde po drátě), nemusíš nikam jezdit. Stačí **jakýkoli Linux
+ve stejném L2 segmentu**, na kterém máš root.
+
+Takhle se to povedlo na Cube 60G ac, který byl po nepovedené instalaci
+v etherbootu:
+
+```bash
+# na Linuxu v tom segmentu
+mkdir /tmp/ni && cd /tmp/ni
+curl -O https://download.mikrotik.com/routeros/7.16/netinstall-7.16.tar.gz
+curl -O https://download.mikrotik.com/routeros/7.24.5/routeros-7.24.5-arm.npk
+curl -O https://download.mikrotik.com/routeros/7.24.5/wireless-7.24.5-arm.npk
+tar xzf netinstall-7.16.tar.gz
+
+# adresa ze stejného segmentu, ze které se bude přidělovat klientovi
+ip addr add 192.168.88.1/24 dev <rozhraní>
+
+./netinstall-cli -v -s obnova.rsc -a 192.168.88.2 \
+    routeros-7.24.5-arm.npk wireless-7.24.5-arm.npk
+```
+
+Průběh, který chceš vidět:
+
+```
+Received a BOOTP request from 18:FD:74:41:E3:02 (arm)
+Assigned 192.168.88.2 to 18:FD:74:41:E3:02
+Booting device into setup mode
+Formatting device
+Sending packages to device
+Successfully finished installing the device
+```
+
+Celé to trvalo **100 sekund**. `-s obnova.rsc` nasadí konfiguraci hned po
+instalaci — dej do něj **jen síť** (bridge, port, IP, routa, DNS), ať je krabice
+hned dosažitelná; rádia dokonfiguruj potom přes API, protože skript běží dřív,
+než rozhraní naběhnou.
+
+> ### Pozor: `netinstall-cli` 7.24.5 tenhle scénář nezvládá
+>
+> Build **7.24.5 neopisuje `xid`** z klientova BOOTP requestu — generuje
+> vlastní. RouterBOOT takovou odpověď zahodí a zacyklí se:
+>
+> ```
+> Request 0x9052f584   Reply 0x67307123     ← neodpovídá
+> Request 0x4488c489   Reply 0xec1d9430     ← neodpovídá
+> ```
+>
+> V logu to vypadá nevinně (`Assigned … to …` pořád dokola, `Waiting for
+> RouterBOARD...`), v odposlechu neuvidíš jediný TFTP paket. **Build 7.16
+> funguje**, i když instaluje balíčky 7.24.5. Pozor, 7.16 nemá přepínač
+> `--reboot`.
+
+Jako prevence jde na krabici předem zapnout `preboot-etherboot`, aby se do
+etherbootu dostala bez mačkání resetu
+([RouterBOARD](https://manual.mikrotik.com/docs/hardware/routerboard)):
+
+```
+/system routerboard settings set preboot-etherboot=15s preboot-etherboot-server=<IP serveru>
+```
+
+Od RouterOS 7.24beta1 umí Netinstall i jiný MikroTik ve stejném segmentu
 ([Netinstall package](https://manual.mikrotik.com/docs/getting-started/installation-and-upgrade/netinstall/netinstall-package)):
 
 ```
@@ -340,10 +420,8 @@ Od RouterOS 7.24beta1 umí Netinstall i jiný MikroTik
     keep-old-configuration=yes auto-reboot=reboot
 ```
 
-Háček: vyžaduje to **L2 sousednost**. Pro krabici, jejíž jediná cesta je mrtvý
-60GHz spoj, to zvenčí neuděláš. Dává to smysl jako **prevence** — mít na POPu
-MikroTik s tímhle balíčkem a předem nastavené
-`preboot-etherboot` ([RouterBOARD](https://manual.mikrotik.com/docs/hardware/routerboard)).
+Háček je u všech variant stejný: **musíš být v L2 segmentu té krabice.** Pro
+CPE, jehož jediná cesta je mrtvý 60GHz spoj, to zvenčí neuděláš.
 
 ---
 
